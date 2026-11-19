@@ -303,6 +303,13 @@ function setupEventListeners() {
     document.getElementById('uploadSelectionPanel').classList.add('hidden');
     document.getElementById('uploadBusList').innerHTML = '';
     document.getElementById('uploadFilesSummary').classList.add('hidden');
+    document.getElementById('uploadStatus').classList.add('hidden');
+    document.getElementById('uploadSpinner').classList.add('hidden');
+    const progressBar = document.getElementById('uploadProgressBar');
+    progressBar.style.width = '0%';
+    progressBar.classList.remove('bg-emerald-500', 'bg-rose-500');
+    progressBar.classList.add('bg-blue-500');
+    document.getElementById('uploadProgressLabel').innerText = '0%';
     modalUpload.classList.remove('hidden');
   });
   document.getElementById('btnCloseUploadModal').addEventListener('click', () => {
@@ -901,17 +908,59 @@ async function readUploadResponse(response) {
   }
 }
 
+function updatePreviewProgress(percent, message) {
+  const statusBox = document.getElementById('uploadStatus');
+  const progressBar = document.getElementById('uploadProgressBar');
+  const progressLabel = document.getElementById('uploadProgressLabel');
+  statusBox.classList.remove('hidden');
+  document.getElementById('uploadSpinner').classList.remove('hidden');
+  document.getElementById('uploadStatusText').innerText = message;
+  progressBar.classList.remove('bg-emerald-500', 'bg-rose-500');
+  progressBar.classList.add('bg-blue-500');
+  progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+  progressLabel.innerText = `${Math.floor(percent)}%`;
+}
+
+function readFileAsArrayBuffer(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = event => {
+      if (event.lengthComputable) onProgress(event.loaded);
+    };
+    reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo'));
+    reader.onabort = () => reject(new Error('Lectura cancelada'));
+    reader.onload = () => {
+      onProgress(file.size);
+      resolve(reader.result);
+    };
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 async function previewUploadBuses(files) {
   const filePreviews = [];
   const errors = [];
 
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
+    const fileLabel = `Archivo ${index + 1}/${files.length}: ${file.name}`;
+    const reportReadProgress = loaded => {
+      const fraction = file.size ? Math.min(1, loaded / file.size) : 1;
+      const percent = ((index + 0.9 * fraction) / files.length) * 100;
+      updatePreviewProgress(percent, `Leyendo ${fileLabel}`);
+    };
+    reportReadProgress(0);
     try {
       let buses;
       if (/\.csv$/i.test(file.name)) {
-        buses = await scanCsvBusCodes(file);
+        buses = await scanCsvBusCodes(file, reportReadProgress);
       } else {
-        const arrayBuffer = await file.arrayBuffer();
+        const arrayBuffer = await readFileAsArrayBuffer(file, reportReadProgress);
+        updatePreviewProgress(
+          ((index + 0.9) / files.length) * 100,
+          `Analizando ${fileLabel}`,
+        );
+        // Let Safari paint the progress message before XLSX parses the workbook.
+        await new Promise(resolve => requestAnimationFrame(resolve));
         const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const rows = XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false });
@@ -928,6 +977,10 @@ async function previewUploadBuses(files) {
       console.error(`Error previewing ${file.name}:`, err);
       errors.push(`${file.name}: no se pudo leer para detectar buses`);
     }
+    updatePreviewProgress(
+      ((index + 1) / files.length) * 100,
+      `Revisión ${index + 1}/${files.length} completada`,
+    );
   }
 
   const buses = Array.from(new Set(filePreviews.flatMap(item => item.buses)))
@@ -965,11 +1018,12 @@ async function previewUploadBuses(files) {
   return buses;
 }
 
-async function scanCsvBusCodes(file) {
+async function scanCsvBusCodes(file, onProgress = () => {}) {
   const reader = file.stream().getReader();
   const decoder = new TextDecoder('utf-8');
   const buses = new Set();
   let pending = '';
+  let bytesRead = 0;
   let busIndex = -1;
   let firstRow = true;
   const processLine = line => {
@@ -988,10 +1042,12 @@ async function scanCsvBusCodes(file) {
 
   while (true) {
     const { value, done } = await reader.read();
+    if (value) bytesRead += value.byteLength;
     pending += decoder.decode(value || new Uint8Array(), { stream: !done });
     const lines = pending.split(/\r?\n/);
     pending = lines.pop() || '';
     lines.forEach(processLine);
+    onProgress(bytesRead);
     if (done) break;
     // Yield periodically so large files do not lock up the browser tab.
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -1003,14 +1059,16 @@ async function scanCsvBusCodes(file) {
 
 // 7. FILE UPLOAD HANDLING
 async function handleFileUpload(files) {
+  if (!files || !files.length) return;
   pendingUploadFiles = Array.from(files);
   const statusBox = document.getElementById('uploadStatus');
   const statusText = document.getElementById('uploadStatusText');
   const progressBar = document.getElementById('uploadProgressBar');
   const progressLabel = document.getElementById('uploadProgressLabel');
 
-  statusBox.classList.add('hidden');
-  document.getElementById('uploadSpinner').classList.add('hidden');
+  statusBox.classList.remove('hidden');
+  document.getElementById('uploadSpinner').classList.remove('hidden');
+  statusText.innerText = `Preparando ${pendingUploadFiles.length} archivo(s)…`;
   document.getElementById('uploadFilesSummary').textContent =
     `${pendingUploadFiles.length} archivo(s): ${pendingUploadFiles.map(file => file.name).join(', ')}`;
   document.getElementById('uploadFilesSummary').classList.remove('hidden');
@@ -1020,15 +1078,26 @@ async function handleFileUpload(files) {
   const buses = await previewUploadBuses(pendingUploadFiles);
   if (!buses.length) {
     statusBox.classList.remove('hidden');
+    document.getElementById('uploadSpinner').classList.add('hidden');
     statusText.innerText = `❌ No se detectaron buses válidos. ${uploadPreviewErrors.join('; ')}`;
-    if (progressBar) { progressBar.style.width = '100%'; progressBar.classList.replace('bg-blue-500', 'bg-rose-500'); }
+    if (progressBar) {
+      progressBar.style.width = '100%';
+      progressBar.classList.remove('bg-blue-500', 'bg-emerald-500');
+      progressBar.classList.add('bg-rose-500');
+    }
     if (progressLabel) progressLabel.innerText = '100%';
     return;
   }
 
-  statusText.innerText = `📄 ${uploadPreviewFiles.length} archivo(s) listo(s) para cargar. Puedes elegir los buses que se importarán.`;
+  document.getElementById('uploadSpinner').classList.add('hidden');
+  statusText.innerText = `📄 Lectura lista: ${pendingUploadFiles.length}/${pendingUploadFiles.length} archivos revisados. Selecciona los buses que quieres cargar.`;
   statusBox.classList.remove('hidden');
-  if (progressBar) { progressBar.style.width = '15%'; progressLabel.innerText = '15%'; }
+  if (progressBar) {
+    progressBar.style.width = '100%';
+    progressBar.classList.remove('bg-blue-500', 'bg-rose-500');
+    progressBar.classList.add('bg-emerald-500');
+  }
+  if (progressLabel) progressLabel.innerText = '100%';
 }
 
 async function performUpload(selectedBuses = []) {
