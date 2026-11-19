@@ -6,3 +6,6 @@ backend/sample_test.xlsx
 __pycache__/
 *.py[cod]
 backend/venv/
+
+# Frontend build output
+frontend/dist/
