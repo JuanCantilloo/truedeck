@@ -1132,7 +1132,8 @@ async function performUpload(selectedBuses = []) {
   let totalRows = 0;
   let totalFailures = 0;
   const uploadErrors = [...uploadPreviewErrors];
-  const chunkSize = 8 * 1024 * 1024;
+  // Keep each multipart request under Vercel's 4.5 MB function payload limit.
+  const chunkSize = 3 * 1024 * 1024;
   const totalChunks = filesToUpload.reduce(
     (total, item) => total + Math.max(1, Math.ceil(item.file.size / chunkSize)),
     0
