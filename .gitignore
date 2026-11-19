@@ -1,0 +1,8 @@
+# Local telemetry data and SQLite state
+backend/telemetria.db*
+backend/sample_test.xlsx
+
+# Python build/runtime files
+__pycache__/
+*.py[cod]
+backend/venv/

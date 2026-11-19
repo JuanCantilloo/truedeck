@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="es" class="h-full bg-slate-900 text-slate-100">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TrueDeck Telemetría - Análisis de Tramas y Latencia</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#eff6ff',
+              500: '#3b82f6',
+              600: '#2563eb',
+              700: '#1d4ed8',
+              800: '#1e40af',
+              900: '#1e3a8a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- Leaflet CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  
+  <!-- Leaflet MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <!-- Leaflet Heatmap Plugin -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- SheetJS (xlsx export) -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+  <style>
+    /* Custom scrollbars */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
+    #map { height: 100%; min-height: 480px; width: 100%; border-radius: 0.75rem; z-index: 10; }
+    .leaflet-popup-content-wrapper {
+      background: #1e293b !important;
+      color: #f8fafc !important;
+      border-radius: 0.5rem;
+      border: 1px solid #334155;
+    }
+    .leaflet-popup-tip {
+      background: #1e293b !important;
+    }
+  </style>
+</head>
+<body class="h-full flex flex-col font-sans antialiased bg-slate-950 text-slate-100">
+
+  <!-- TOP HEADER -->
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between shadow-md">
+    <div class="flex items-center space-x-3">
+      <div class="w-10 h-10 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center shadow-lg shadow-blue-500/20">
+        <i data-lucide="bus" class="w-6 h-6 text-white"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          TrueDeck <span class="text-xs uppercase px-2 py-0.5 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-full font-mono">Telemetría Flota</span>
+        </h1>
+        <p class="text-xs text-slate-400">Análisis de Descuadre de Tramas, Latencia y Coordenadas GPS</p>
+      </div>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <!-- Google Maps settings button -->
+      <button id="btnOpenMapConfig" class="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg transition shadow-sm">
+        <i data-lucide="map-pin" class="w-4 h-4 text-emerald-400"></i>
+        <span>Mapa: <strong id="lblActiveMap" class="text-emerald-400">Libre (OSM)</strong></span>
+        <i data-lucide="settings" class="w-3.5 h-3.5 text-slate-400"></i>
+      </button>
+
+      <!-- Upload Excel Button -->
+      <button id="btnOpenUploadModal" class="flex items-center gap-2 px-4 py-1.5 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-500 rounded-lg shadow-lg shadow-blue-600/30 transition">
+        <i data-lucide="file-up" class="w-4 h-4"></i>
+        <span>Cargar Excel / CSV</span>
+      </button>
+
+      <!-- Reset Data Button -->
+      <button id="btnClearData" title="Reiniciar datos de telemetría" class="p-2 text-slate-400 hover:text-rose-400 hover:bg-slate-800 border border-slate-800 rounded-lg transition">
+        <i data-lucide="trash-2" class="w-4 h-4"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- MAIN BODY -->
+  <div class="flex-1 min-h-0 overflow-y-auto flex flex-col p-4 md:p-6 gap-4">
+    
+    <!-- KPI STATS CARDS -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div class="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-400">Total Tramas</p>
+          <p id="statTotal" class="text-xl font-bold text-white mt-0.5">0</p>
+        </div>
+        <div class="p-2 rounded-lg bg-slate-800 text-blue-400">
+          <i data-lucide="database" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between border-l-4 border-l-rose-500">
+        <div>
+          <p class="text-xs font-medium text-slate-400">Descuadres (<code class="text-rose-400">true</code>)</p>
+          <p id="statFallas" class="text-xl font-bold text-rose-400 mt-0.5">0</p>
+        </div>
+        <div class="p-2 rounded-lg bg-rose-500/10 text-rose-400">
+          <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-400">Tasa de Descuadre</p>
+          <p id="statTasa" class="text-xl font-bold text-amber-400 mt-0.5">0%</p>
+        </div>
+        <div class="p-2 rounded-lg bg-amber-500/10 text-amber-400">
+          <i data-lucide="percent" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-400">Buses Auditados</p>
+          <p id="statVehiculos" class="text-xl font-bold text-indigo-400 mt-0.5">0</p>
+        </div>
+        <div class="p-2 rounded-lg bg-indigo-500/10 text-indigo-400">
+          <i data-lucide="bus-front" class="w-5 h-5"></i>
+        </div>
+      </div>
+
+      <div class="bg-slate-900 border border-slate-800/80 rounded-xl p-3.5 flex items-center justify-between">
+        <div>
+          <p class="text-xs font-medium text-slate-400">Archivos Cargados</p>
+          <p id="statArchivos" class="text-xl font-bold text-emerald-400 mt-0.5">0</p>
+        </div>
+        <div class="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+          <i data-lucide="files" class="w-5 h-5"></i>
+        </div>
+      </div>
+    </div>
+
+    <!-- FILTERS OPEN IN A COMPACT MODAL -->
+    <div class="flex justify-end">
+      <button id="btnOpenFilters" type="button" class="flex items-center gap-2 px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-200 shadow-sm transition">
+        <i data-lucide="sliders-horizontal" class="w-4 h-4 text-blue-400"></i>
+        <span>Filtros</span>
+        <span id="badgeVehiculosSelectedTop" class="hidden px-1.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px]">0 buses</span>
+      </button>
+    </div>
+    <div id="filterModal" class="hidden fixed inset-0 z-40 bg-black/70 backdrop-blur-sm items-center justify-center p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="filterModalTitle">
+      <div class="w-full max-w-6xl max-h-[92vh] overflow-y-auto bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl">
+        <div class="sticky top-0 z-10 flex items-center justify-between px-5 py-4 bg-slate-900 border-b border-slate-800">
+          <div>
+            <h2 id="filterModalTitle" class="text-base font-semibold text-white">Filtros del dashboard</h2>
+            <p class="text-xs text-slate-400 mt-1">Ajusta criterios o selecciona vehículos para actualizar los datos.</p>
+          </div>
+          <button id="btnCloseFilters" type="button" class="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg" aria-label="Cerrar filtros">
+            <i data-lucide="x" class="w-5 h-5"></i>
+          </button>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm m-4">
+      <form id="filterForm" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3 items-end">
+        
+        <!-- Bus Code Filter -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
+            <i data-lucide="search" class="w-3.5 h-3.5 text-blue-400"></i> Código de Bus
+          </label>
+          <input type="text" id="filterBus" list="listVehiculos" placeholder="Ej. Z917838" 
+                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+          <datalist id="listVehiculos"></datalist>
+          <div id="recentBusSearches" class="flex flex-wrap gap-1 mt-1.5" aria-label="Búsquedas recientes"></div>
+        </div>
+
+        <!-- Route Filter -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
+            <i data-lucide="git-commit" class="w-3.5 h-3.5 text-purple-400"></i> Ruta
+          </label>
+          <select id="filterRuta" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500">
+            <option value="">Todas las rutas</option>
+          </select>
+        </div>
+
+        <!-- Latency Range Filter -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
+            <i data-lucide="clock" class="w-3.5 h-3.5 text-amber-400"></i> Rango Latencia
+          </label>
+          <select id="filterRangoLatencia" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500">
+            <option value="">Todos los rangos</option>
+            <option value="Mayor a 30 Min">5) Mayor a 30 Min</option>
+            <option value="15 a 30 Min">4) 15 a 30 Min</option>
+            <option value="5 a 15 Min">3) 5 a 15 Min</option>
+            <option value="1 a 5 Min">2) 1 a 5 Min</option>
+            <option value="Menor a 1 Min">1) Menor a 1 Min</option>
+          </select>
+        </div>
+
+        <!-- Start Date/Time -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Desde (Lectura)</label>
+          <input type="datetime-local" id="filterFechaInicio" 
+                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+
+        <!-- End Date/Time -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1">Hasta (Lectura)</label>
+          <input type="datetime-local" id="filterFechaFin" 
+                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+        </div>
+
+        <!-- Quick Switch: Solo Retransmitidas -->
+        <div class="flex items-center h-full pb-1">
+          <label class="relative flex items-center gap-2 cursor-pointer select-none bg-slate-950/80 hover:bg-slate-950 border border-slate-700 rounded-lg px-3 py-1.5 w-full">
+            <input type="checkbox" id="filterSoloRetransmitida" class="w-4 h-4 text-rose-500 rounded bg-slate-800 border-slate-600 focus:ring-0 focus:ring-offset-0">
+            <span class="text-xs font-medium text-rose-300 flex items-center gap-1.5">
+              <span class="w-2 h-2 rounded-full bg-rose-500 inline-block animate-pulse"></span>
+              Solo con Falla (<code class="text-[11px] text-rose-400">true</code>)
+            </span>
+          </label>
+        </div>
+
+        <!-- Limit Selector -->
+        <div>
+          <label class="block text-xs font-medium text-slate-300 mb-1 flex items-center gap-1">
+            <i data-lucide="layers" class="w-3.5 h-3.5 text-blue-400"></i> Límite Puntos
+          </label>
+          <select id="filterLimit" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500">
+            <option value="0" selected>Todos (Sin límite)</option>
+            <option value="1000">1.000 puntos</option>
+            <option value="5000">5.000 puntos</option>
+            <option value="10000">10.000 puntos</option>
+            <option value="25000">25.000 puntos</option>
+            <option value="50000">50.000 puntos</option>
+          </select>
+        </div>
+
+        <!-- Buttons -->
+        <div class="flex gap-2">
+          <button type="submit" class="flex-1 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white font-medium px-3 py-1.5 rounded-lg text-sm transition">
+            <i data-lucide="filter" class="w-3.5 h-3.5"></i>
+            <span>Filtrar</span>
+          </button>
+          <button type="button" id="btnResetFilters" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded-lg text-xs transition" title="Limpiar filtros">
+            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </form>
+
+      <!-- VEHICLE CHECKBOX PANEL (collapsible) -->
+      <div class="border-t border-slate-800">
+        <button id="btnToggleVehiclePanel" class="w-full flex items-center justify-between px-4 py-2.5 text-xs text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition select-none">
+          <div class="flex items-center gap-2">
+            <i data-lucide="bus" class="w-3.5 h-3.5 text-indigo-400"></i>
+            <span class="font-semibold text-slate-300">Selección de Vehículos por Checkbox</span>
+            <span id="badgeVehiculosSelected" class="hidden px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 text-[11px] font-bold">0 seleccionados</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="text-[11px] text-slate-500" id="lblVehicleCount">— carga datos para ver buses</span>
+            <i data-lucide="chevron-down" id="iconVehicleChevron" class="w-4 h-4 transition-transform duration-200"></i>
+          </div>
+        </button>
+
+        <!-- Panel body (hidden by default) -->
+        <div id="vehicleCheckboxPanel" class="hidden px-4 pb-4 pt-2">
+          <!-- Search & actions -->
+          <div class="flex items-center gap-2 mb-3 flex-wrap">
+            <div class="relative flex-1 min-w-[160px]">
+              <i data-lucide="search" class="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-500 pointer-events-none"></i>
+              <input type="text" id="searchVehicleCheck" placeholder="Buscar bus por código..."
+                     class="w-full bg-slate-950 border border-slate-700 rounded-lg pl-7 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+            </div>
+            <button type="button" id="btnSelectAllVehicles" class="px-2.5 py-1.5 text-[11px] font-medium bg-indigo-600/20 hover:bg-indigo-600/40 text-indigo-300 border border-indigo-500/30 rounded-lg transition whitespace-nowrap">
+              Todos ✓
+            </button>
+            <button type="button" id="btnClearAllVehicles" class="px-2.5 py-1.5 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition whitespace-nowrap">
+              Ninguno ✗
+            </button>
+            <button type="button" id="btnApplyVehicleFilter" class="px-3 py-1.5 text-[11px] font-semibold bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition whitespace-nowrap flex items-center gap-1">
+              <i data-lucide="filter" class="w-3 h-3"></i> Aplicar Selección
+            </button>
+          </div>
+
+          <!-- Checkbox grid -->
+          <div id="vehicleCheckboxGrid" class="grid grid-cols-1 gap-1.5 max-h-64 overflow-y-auto pr-1 scrollbar-thin">
+            <p class="col-span-full text-xs text-slate-500 text-center py-4">Carga un archivo de datos para ver los vehículos disponibles.</p>
+          </div>
+        </div>
+      </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- MAP LEFT, ANALYTICS RIGHT -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-4 items-stretch">
+    <section class="lg:col-span-7 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm relative h-[72vh] min-h-[540px]">
+      <div class="px-4 py-2.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between gap-3 text-xs z-20 flex-wrap">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold text-slate-200 flex items-center gap-1.5">
+            <i data-lucide="map" class="w-4 h-4 text-blue-400"></i>
+            Mapa de Transmisiones
+          </span>
+          <span id="badgePuntosCount" class="px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 text-[11px] font-mono">0 registros · 0 ubicaciones</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="btnToggleHeatmap" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 rounded flex items-center gap-1.5 transition">
+            <i data-lucide="flame" class="w-3.5 h-3.5 text-amber-400"></i><span>Mapa de Calor</span>
+          </button>
+          <select id="selectMapLayer" class="bg-slate-800 border border-slate-700 text-slate-200 rounded px-2 py-1 text-xs focus:outline-none">
+            <option value="osm">OpenStreetMap (claro)</option>
+            <option value="carto">Carto Voyager</option>
+            <option value="satellite">Satelital (Esri)</option>
+          </select>
+          <button id="btnCenterBogota" title="Centrar en Bogotá" class="p-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded text-slate-300">
+            <i data-lucide="crosshair" class="w-3.5 h-3.5"></i>
+          </button>
+        </div>
+      </div>
+      <div class="flex-1 min-h-0 relative">
+        <div id="map"></div>
+        <div class="absolute bottom-4 left-4 z-[400] bg-slate-900/90 backdrop-blur border border-slate-800 rounded-lg p-2.5 shadow-xl text-xs space-y-1.5 pointer-events-auto">
+          <div class="font-semibold text-slate-300 mb-1 text-[11px] uppercase tracking-wider">Convenciones</div>
+          <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-rose-500 inline-block"></span><span class="text-slate-300">Descuadre / Retransmitido</span></div>
+          <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-amber-400 inline-block"></span><span class="text-slate-300">Latencia moderada (&gt;5 min)</span></div>
+          <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-emerald-500 inline-block"></span><span class="text-slate-300">Transmisión normal</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="lg:col-span-5 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm h-[72vh] min-h-[540px]">
+      <div class="px-4 py-3 border-b border-slate-800">
+        <h2 class="font-semibold text-slate-200 flex items-center gap-2"><i data-lucide="bar-chart-2" class="w-4 h-4 text-blue-400"></i>Gráficas y métricas</h2>
+        <p class="text-xs text-slate-500 mt-1">Resumen de descuadres y latencia de los registros filtrados.</p>
+      </div>
+      <div id="tabContentCharts" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+        <div class="bg-slate-950/60 p-3.5 rounded-lg border border-slate-800">
+          <h3 class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5"><i data-lucide="award" class="w-3.5 h-3.5 text-amber-400"></i>Top 10 Buses con Más Descuadres de Trama</h3>
+          <div class="h-52"><canvas id="chartTopBuses"></canvas></div>
+        </div>
+        <div class="bg-slate-950/60 p-3.5 rounded-lg border border-slate-800">
+          <h3 class="text-xs font-semibold text-slate-300 mb-2 flex items-center gap-1.5"><i data-lucide="pie-chart" class="w-3.5 h-3.5 text-blue-400"></i>Distribución por Rango de Latencia</h3>
+          <div class="h-52 flex items-center justify-center"><canvas id="chartRangos"></canvas></div>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <!-- FULL WIDTH DATA TABLE -->
+    <section class="flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-sm min-h-[480px] h-[58vh]">
+      <div class="px-4 py-3 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <h2 class="font-semibold text-slate-200 flex items-center gap-2"><i data-lucide="table" class="w-4 h-4 text-blue-400"></i>Tabla de datos</h2>
+          <p id="lblTableSummary" class="text-xs text-slate-500 mt-1">Mostrando 0 registros</p>
+        </div>
+        <button id="btnExportExcel" class="px-2.5 py-1.5 text-xs font-medium text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded flex items-center gap-1 transition">
+          <i data-lucide="download" class="w-3.5 h-3.5"></i><span>Exportar Excel</span>
+        </button>
+      </div>
+      <div id="tabContentTable" class="flex-1 min-h-0 flex flex-col overflow-hidden p-3">
+        <div class="text-xs text-slate-500 mb-2">Haz clic en 📍 para ir a la ubicación en el mapa.</div>
+        <div class="flex-1 overflow-auto border border-slate-800 rounded-lg">
+          <table class="w-full text-left text-xs text-slate-300 border-collapse">
+            <thead class="bg-slate-950/80 sticky top-0 text-[11px] text-slate-400 uppercase tracking-wider border-b border-slate-800">
+              <tr><th class="p-2">Bus</th><th class="p-2">Ruta</th><th class="p-2">Lectura</th><th class="p-2">Retraso</th><th class="p-2 text-center">Falla</th><th class="p-2 text-center">Acción</th></tr>
+            </thead>
+            <tbody id="tableBody" class="divide-y divide-slate-800/60 font-mono">
+              <tr><td colspan="6" class="text-center py-8 text-slate-500">No hay datos cargados. Usa el botón "Cargar Excel / CSV" para iniciar.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Loading overlay (shows during file upload) -->
+<div id="loadingOverlay" class="hidden fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+  <svg class="animate-spin h-12 w-12 text-white mb-3" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"></path>
+  </svg>
+  <span id="loadingMessage" class="text-white text-lg">Procesando archivo…</span>
+</div>
+
+  <div id="modalUpload" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+      <button id="btnCloseUploadModal" class="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center">
+          <i data-lucide="file-spreadsheet" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h2 class="text-base font-bold text-white">Cargar Archivo de Telemetría</h2>
+          <p class="text-xs text-slate-400">Formatos compatibles: .xlsx, .xls, .csv</p>
+        </div>
+      </div>
+
+      <!-- Drag & Drop Area -->
+      <div id="dropZone" class="border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-8 text-center cursor-pointer bg-slate-950/50 transition">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" multiple class="hidden">
+        <i data-lucide="cloud-upload" class="w-10 h-10 text-slate-400 mx-auto mb-3"></i>
+        <p class="text-sm font-semibold text-slate-200">Selecciona o arrastra uno o varios archivos</p>
+        <p class="text-xs text-slate-500 mt-1">Reconoce automáticamente las columnas: idVehiculo, fechaHoraLecturaDato, fechaHoraEnvioDato, Coordenadas, tramaRetransmitida, etc.</p>
+      </div>
+      <p id="uploadFilesSummary" class="hidden mt-2 text-[11px] text-slate-400"></p>
+
+      <!-- Selección de buses del archivo -->
+      <div id="uploadSelectionPanel" class="hidden mt-4 p-4 bg-slate-950 border border-slate-800 rounded-lg">
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <div>
+            <p class="text-xs font-semibold text-slate-200">Selecciona los buses que quieres importar</p>
+            <p class="text-[11px] text-slate-400" id="uploadSelectionSummary">0 buses detectados</p>
+          </div>
+          <div class="flex gap-2">
+            <button type="button" id="btnSelectAllUploadBuses" class="px-2 py-1 text-[11px] font-medium bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-lg transition">
+              Todos
+            </button>
+            <button type="button" id="btnClearUploadSelection" class="px-2 py-1 text-[11px] font-medium bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-lg transition">
+              Ninguno
+            </button>
+          </div>
+        </div>
+        <div id="uploadBusList" class="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-40 overflow-y-auto pr-1"></div>
+        <button type="button" id="btnApplyUploadSelection" class="mt-4 w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold px-4 py-2 rounded-lg text-sm transition">
+          Cargar buses seleccionados
+        </button>
+      </div>
+
+      <!-- Selected file indicator & progress -->
+      <div id="uploadStatus" class="hidden mt-4 p-4 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-300 space-y-2">
+        <div class="flex items-center gap-3">
+          <div id="uploadSpinner" class="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin shrink-0"></div>
+          <span id="uploadStatusText" class="whitespace-pre-line break-words">Procesando archivo...</span>
+        </div>
+        <!-- Progress bar -->
+        <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+          <div id="uploadProgressBar" class="h-1.5 bg-blue-500 rounded-full transition-all duration-300" style="width: 0%"></div>
+        </div>
+        <div id="uploadProgressLabel" class="text-[11px] text-slate-400 text-right">0%</div>
+      </div>
+
+      <!-- Sample structure note -->
+      <div class="mt-4 p-3 rounded-lg bg-blue-500/5 border border-blue-500/20 text-xs text-blue-300/80">
+        <p class="font-medium text-blue-300 mb-1">Columnas esperadas en el Excel:</p>
+        <p class="text-[11px] font-mono">idRuta | idVehiculo | fechaHoraLecturaDato | fechaHoraEnvioDato | Coordenadas | tipoBus | RangoLatencia | tramaRetransmitida</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: GOOGLE MAPS CONFIG -->
+  <div id="modalMapConfig" class="hidden fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-2xl relative">
+      <button id="btnCloseMapConfig" class="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg">
+        <i data-lucide="x" class="w-5 h-5"></i>
+      </button>
+
+      <div class="flex items-center gap-3 mb-4">
+        <div class="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center">
+          <i data-lucide="map-pin" class="w-6 h-6"></i>
+        </div>
+        <div>
+          <h2 class="text-base font-bold text-white">Configuración del Mapa</h2>
+          <p class="text-xs text-slate-400">Alterna entre mapa libre o Google Maps</p>
+        </div>
+      </div>
+
+      <div class="space-y-4 text-xs">
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Modo de Mapa Activo</label>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btnSelectFreeMap" class="p-2.5 rounded-lg border border-blue-500 bg-blue-500/10 text-blue-400 font-semibold text-center">
+              ✓ Leaflet / Libre
+            </button>
+            <button id="btnSelectGoogleMap" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-center">
+              Google Maps
+            </button>
+          </div>
+        </div>
+
+        <div>
+          <label class="block font-medium text-slate-300 mb-1">Google Maps API Key (Opcional)</label>
+          <input type="password" id="inputGoogleMapsKey" placeholder="Pega tu clave AIzaSy..." 
+                 class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-blue-500 font-mono">
+          <p class="text-[11px] text-slate-500 mt-1">La clave se guarda localmente en tu navegador para cuando desees activarla.</p>
+        </div>
+
+        <button id="btnSaveMapConfig" class="w-full py-2 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg text-xs transition">
+          Guardar Configuración
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- APPLICATION SCRIPT -->
+  <script src="/static/app.js"></script>
+</body>
+</html>
