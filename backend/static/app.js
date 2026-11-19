@@ -1018,43 +1018,34 @@ async function previewUploadBuses(files) {
   return buses;
 }
 
-async function scanCsvBusCodes(file, onProgress = () => {}) {
-  const reader = file.stream().getReader();
-  const decoder = new TextDecoder('utf-8');
-  const buses = new Set();
-  let pending = '';
-  let bytesRead = 0;
-  let busIndex = -1;
-  let firstRow = true;
-  const processLine = line => {
-    const fields = line.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(value => value.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
-    if (firstRow) {
-      firstRow = false;
-      const headers = fields.map(value => value.replace(/^\uFEFF/, '').toLowerCase().replace(/[^a-z0-9]/g, ''));
-      busIndex = headers.findIndex(value => ['idvehiculo', 'vehiculo', 'bus', 'codigobus'].includes(value));
+function scanCsvBusCodes(file, onProgress = () => {}) {
+  return new Promise((resolve, reject) => {
+    let worker;
+    try {
+      worker = new Worker(new URL('./csv-preview-worker.js', import.meta.url), { type: 'module' });
+    } catch (err) {
+      reject(err);
       return;
     }
-    if (busIndex >= 0 && fields[busIndex]) {
-      const code = normalizeBusCode(fields[busIndex]);
-      if (code) buses.add(code);
-    }
-  };
 
-  while (true) {
-    const { value, done } = await reader.read();
-    if (value) bytesRead += value.byteLength;
-    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop() || '';
-    lines.forEach(processLine);
-    onProgress(bytesRead);
-    if (done) break;
-    // Yield periodically so large files do not lock up the browser tab.
-    await new Promise(resolve => setTimeout(resolve, 0));
-  }
-  if (pending) processLine(pending);
-  if (busIndex < 0) throw new Error('No se encontró la columna idVehiculo');
-  return [...buses];
+    worker.onmessage = event => {
+      const message = event.data || {};
+      if (message.type === 'progress') {
+        onProgress(message.loaded);
+      } else if (message.type === 'complete') {
+        worker.terminate();
+        resolve(message.buses || []);
+      } else if (message.type === 'error') {
+        worker.terminate();
+        reject(new Error(message.message || 'No se pudo analizar el CSV'));
+      }
+    };
+    worker.onerror = event => {
+      worker.terminate();
+      reject(new Error(event.message || 'Falló el análisis del CSV'));
+    };
+    worker.postMessage({ file });
+  });
 }
 
 // 7. FILE UPLOAD HANDLING
@@ -1132,7 +1123,11 @@ async function performUpload(selectedBuses = []) {
   submitButton.disabled = true;
   submitButton.classList.add('opacity-60', 'cursor-not-allowed');
   document.getElementById('uploadSpinner').classList.remove('hidden');
-  if (progressBar) { progressBar.style.width = '0%'; progressBar.classList.replace('bg-rose-500', 'bg-blue-500'); }
+  if (progressBar) {
+    progressBar.style.width = '0%';
+    progressBar.classList.remove('bg-rose-500', 'bg-emerald-500');
+    progressBar.classList.add('bg-blue-500');
+  }
   let successfulFiles = 0;
   let totalRows = 0;
   let totalFailures = 0;
@@ -1208,7 +1203,8 @@ async function performUpload(selectedBuses = []) {
   if (progressBar) {
     progressBar.style.width = '100%';
     progressLabel.innerText = '100%';
-    progressBar.classList.replace('bg-blue-500', uploadErrors.length ? 'bg-rose-500' : 'bg-emerald-500');
+    progressBar.classList.remove('bg-blue-500', 'bg-emerald-500', 'bg-rose-500');
+    progressBar.classList.add(uploadErrors.length ? 'bg-rose-500' : 'bg-emerald-500');
   }
   document.getElementById('uploadSpinner').classList.add('hidden');
   statusText.innerText =
