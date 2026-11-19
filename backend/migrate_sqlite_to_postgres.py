@@ -35,7 +35,11 @@ def main() -> None:
         raise SystemExit(f"No existe la SQLite de origen: {SQLITE_PATH}")
 
     source_engine = create_engine(f"sqlite:///{SQLITE_PATH}")
-    target_engine = create_engine(normalize_postgres_url(target_url), pool_pre_ping=True)
+    target_engine = create_engine(
+        normalize_postgres_url(target_url),
+        pool_pre_ping=True,
+        connect_args={"sslmode": "require", "prepare_threshold": None},
+    )
     source_metadata = MetaData()
     target_metadata = MetaData()
     source_metadata.reflect(bind=source_engine, only=TABLE_NAMES)

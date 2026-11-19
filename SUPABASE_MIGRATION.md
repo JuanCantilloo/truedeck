@@ -8,9 +8,8 @@ using `backend/telemetria.db` (SQLite).
 1. Create a Supabase project.
 2. Run `supabase/migrations/20261119000100_create_telemetry_tables.sql` in the
    Supabase SQL Editor, or apply it with the Supabase CLI.
-3. Copy the PostgreSQL URI from **Project Settings → Database → Connection
-   string**. Use the pooled URI for serverless deployments and keep its
-   password private.
+3. For Vercel, open **Connect → Transaction pooler** and copy its URI (port
+   `6543`). Keep its password private and URL-encode reserved characters.
 4. Set `DATABASE_URL` in the backend's environment. The backend understands
    both `postgresql://` and `postgres://` Supabase URIs.
 
@@ -27,6 +26,9 @@ tables in batches and resets the identity sequences afterward:
 python -m pip install -r requirements.txt
 DATABASE_URL='postgresql://…' python backend/migrate_sqlite_to_postgres.py
 ```
+
+For this one-time copy, use Supabase's direct URI or session-pooler URI rather
+than the transaction-pooler URI.
 
 Set `SQLITE_PATH` if the source file is somewhere other than
 `backend/telemetria.db`. The script refuses to write into non-empty target

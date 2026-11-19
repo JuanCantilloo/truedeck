@@ -24,6 +24,11 @@ engine_options = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite:"):
     engine_options["connect_args"] = {"check_same_thread": False}
 else:
+    engine_options["connect_args"] = {
+        "sslmode": "require",
+        # Supabase's transaction pooler does not support prepared statements.
+        "prepare_threshold": None,
+    }
     # The backend runs as a serverless function on Vercel; avoid keeping a
     # process-local pool of connections alive between short invocations.
     if os.getenv("VERCEL"):
