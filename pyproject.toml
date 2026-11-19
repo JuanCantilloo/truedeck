@@ -1,0 +1,5 @@
+[tool.vercel]
+entrypoint = "backend.main:app"
+
+[tool.vercel.scripts]
+build = "cd frontend && npm install --no-package-lock && npm run build"

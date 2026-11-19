@@ -1,15 +1,35 @@
 import os
+from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from models import Base
+from sqlalchemy.pool import NullPool
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "telemetria.db")
-DATABASE_URL = f"sqlite:///{DB_PATH}"
+if __package__:
+    from .models import Base
+else:
+    from models import Base
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+DB_PATH = Path(__file__).resolve().with_name("telemetria.db")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+    elif DATABASE_URL.startswith("postgresql://"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+else:
+    DATABASE_URL = f"sqlite:///{DB_PATH}"
+
+engine_options = {"pool_pre_ping": True}
+if DATABASE_URL.startswith("sqlite:"):
+    engine_options["connect_args"] = {"check_same_thread": False}
+else:
+    # The backend runs as a serverless function on Vercel; avoid keeping a
+    # process-local pool of connections alive between short invocations.
+    if os.getenv("VERCEL"):
+        engine_options["poolclass"] = NullPool
+
+engine = create_engine(DATABASE_URL, **engine_options)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

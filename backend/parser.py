@@ -68,7 +68,7 @@ def clean_spanish_dates_series(series: pd.Series) -> pd.Series:
 def parse_excel_or_csv_fast(file_bytes_or_path: Any, filename: str, selected_buses: Optional[List[str]] = None) -> Tuple[List[tuple], int, int]:
     """
     Ultra-fast vectorized parser using calamine (Rust) for Excel or C-engine for CSV.
-    Returns (tuples_for_sqlite_executemany, total_records, fallas_count).
+    Returns (rows_for_database_insert, total_records, fallas_count).
     Optional selected_buses can be used to restrict import to a subset of bus IDs.
     """
     if hasattr(file_bytes_or_path, 'read'):
@@ -178,7 +178,8 @@ def parse_excel_or_csv_fast(file_bytes_or_path: Any, filename: str, selected_bus
     df['vel_val']  = pd.to_numeric(df[c_vel],  errors='coerce').fillna(0.0) if c_vel  else 0.0
     df['acel_val'] = pd.to_numeric(df[c_acel], errors='coerce').fillna(0.0) if c_acel else 0.0
 
-    # 6. Format dates as strings for SQLite
+    # 6. Format dates as ISO strings; the SQLAlchemy layer converts these to
+    # native datetimes for both SQLite and PostgreSQL.
     df['lectura_iso'] = df['dt_lectura'].dt.strftime('%Y-%m-%d %H:%M:%S').where(df['dt_lectura'].notna(), None)
     df['envio_iso']   = df['dt_envio'].dt.strftime('%Y-%m-%d %H:%M:%S').where(df['dt_envio'].notna(),   None)
     now_iso = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
@@ -201,7 +202,7 @@ def parse_excel_or_csv_fast(file_bytes_or_path: Any, filename: str, selected_bus
         'carga':    now_iso
     })
 
-    # Replace numpy nan/NaT with None for SQLite compatibility
+    # Replace numpy nan/NaT with None for database compatibility
     out_df = out_df.where(pd.notnull(out_df), None)
     tuples_to_insert = list(out_df.itertuples(index=False, name=None))
 

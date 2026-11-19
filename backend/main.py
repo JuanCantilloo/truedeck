@@ -3,9 +3,8 @@ import io
 import json
 import datetime
 import logging
-import shutil
+import math
 import tempfile
-import time
 import uuid
 from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, Form, Query, Depends, HTTPException
@@ -16,15 +15,22 @@ from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc, and_, or_
 
-from database import init_db, get_db, SessionLocal
-from models import RegistroTelemetria, ArchivoCargado
-from parser import parse_excel_or_csv_fast, iter_csv_telemetry_batches
+if __package__:
+    from .database import init_db, get_db
+    from .models import RegistroTelemetria, ArchivoCargado, UploadChunk
+    from .parser import parse_excel_or_csv_fast, iter_csv_telemetry_batches
+else:
+    from database import init_db, get_db
+    from models import RegistroTelemetria, ArchivoCargado, UploadChunk
+    from parser import parse_excel_or_csv_fast, iter_csv_telemetry_batches
 
 app = FastAPI(title="TrueDeck Telemetría & Mapas API", version="1.0.0")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
-UPLOAD_CHUNK_DIR = os.path.join(tempfile.gettempdir(), "truedeck-upload-chunks")
-UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024
+FRONTEND_DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+# Vercel Functions reject request bodies above 4.5 MB, including multipart
+# overhead. Three MiB chunks stay safely below that limit.
+UPLOAD_CHUNK_SIZE = 3 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 if os.path.exists(STATIC_DIR):
@@ -32,7 +38,8 @@ if os.path.exists(STATIC_DIR):
 
 @app.get("/")
 def read_root():
-    index_file = os.path.join(STATIC_DIR, "index.html")
+    frontend_index = os.path.join(FRONTEND_DIST_DIR, "index.html")
+    index_file = frontend_index if os.path.exists(frontend_index) else os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
     return {"message": "TrueDeck API is running"}
@@ -101,22 +108,16 @@ def _parse_selected_buses(buses: Optional[str]) -> List[str]:
 
 
 def _import_telemetry_file(content, filename: str, selected_buses: List[str], db: Session):
-    raw_conn = db.connection().connection
-    cursor = raw_conn.cursor()
     total_registros = 0
     fallas_count = 0
+    columns = [
+        "idRuta", "idVehiculo", "fechaHoraLecturaDato", "fechaHoraEnvioDato",
+        "latitud", "longitud", "tipoBus", "RangoLatencia", "tramaRetransmitida",
+        "velocidadVehiculo", "aceleracionVehiculo", "latenciaMinutos",
+        "archivoOrigen", "fechaCarga",
+    ]
+    date_columns = {"fechaHoraLecturaDato", "fechaHoraEnvioDato", "fechaCarga"}
     try:
-        cursor.execute("PRAGMA journal_mode = WAL")
-        cursor.execute("PRAGMA synchronous = NORMAL")
-        insert_sql = """
-            INSERT INTO telemetria (
-                idRuta, idVehiculo, fechaHoraLecturaDato, fechaHoraEnvioDato,
-                latitud, longitud, tipoBus, RangoLatencia, tramaRetransmitida,
-                velocidadVehiculo, aceleracionVehiculo, latenciaMinutos,
-                archivoOrigen, fechaCarga
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """
-
         if filename.lower().endswith('.csv') and isinstance(content, str):
             batches = iter_csv_telemetry_batches(content, filename, selected_buses)
         else:
@@ -125,30 +126,45 @@ def _import_telemetry_file(content, filename: str, selected_buses: List[str], db
 
         for tuples_data, batch_rows, batch_failures in batches:
             if tuples_data:
-                cursor.executemany(insert_sql, tuples_data)
+                records = []
+                for values in tuples_data:
+                    record = dict(zip(columns, values))
+                    for column, value in record.items():
+                        if hasattr(value, "item"):
+                            value = value.item()
+                        if isinstance(value, float) and math.isnan(value):
+                            value = None
+                        record[column] = value
+                    for column in date_columns:
+                        value = record[column]
+                        if isinstance(value, str) and value:
+                            record[column] = datetime.datetime.fromisoformat(value)
+                    records.append(record)
+                db.execute(RegistroTelemetria.__table__.insert(), records)
             total_registros += batch_rows
             fallas_count += batch_failures
 
         if total_registros == 0:
-            raw_conn.rollback()
+            db.rollback()
             raise HTTPException(status_code=400, detail="El archivo no contiene registros válidos para la selección indicada.")
 
-        cursor.execute(
-            """
-            INSERT INTO archivos_cargados (nombre, totalRegistros, totalConFalla, fechaCarga)
-            VALUES (?, ?, ?, ?)
-            """,
-            (filename, total_registros, fallas_count, datetime.datetime.utcnow().isoformat())
+        db.add(
+            ArchivoCargado(
+                nombre=filename,
+                totalRegistros=total_registros,
+                totalConFalla=fallas_count,
+                fechaCarga=datetime.datetime.utcnow(),
+            )
         )
-        raw_conn.commit()
+        db.commit()
     except (ValueError, OSError) as e:
-        raw_conn.rollback()
+        db.rollback()
         raise HTTPException(status_code=400, detail=f"Error al procesar archivo: {str(e)}")
     except HTTPException:
-        raw_conn.rollback()
+        db.rollback()
         raise
     except Exception as e:
-        raw_conn.rollback()
+        db.rollback()
         raise HTTPException(status_code=500, detail=f"Error al guardar registros en base de datos: {str(e)}")
 
     return {
@@ -160,38 +176,17 @@ def _import_telemetry_file(content, filename: str, selected_buses: List[str], db
     }
 
 
-def _upload_session_dir(upload_id: str) -> str:
+def _normalize_upload_id(upload_id: str) -> str:
     try:
-        safe_id = str(uuid.UUID(upload_id))
+        return str(uuid.UUID(upload_id))
     except ValueError:
         raise HTTPException(status_code=400, detail="Identificador de carga inválido.")
-    return os.path.join(UPLOAD_CHUNK_DIR, safe_id)
 
 
-def _remove_upload_session(upload_dir: str) -> None:
-    try:
-        shutil.rmtree(upload_dir)
-    except FileNotFoundError:
-        pass
-    except OSError:
-        logger.exception("Could not remove temporary upload directory %s", upload_dir)
-
-
-def _cleanup_stale_upload_sessions() -> None:
-    if not os.path.isdir(UPLOAD_CHUNK_DIR):
-        return
-    cutoff = time.time() - 24 * 60 * 60
-    try:
-        entries = list(os.scandir(UPLOAD_CHUNK_DIR))
-    except OSError:
-        logger.exception("Could not inspect temporary upload directory")
-        return
-    for entry in entries:
-        try:
-            if entry.is_dir(follow_symlinks=False) and entry.stat(follow_symlinks=False).st_mtime < cutoff:
-                _remove_upload_session(entry.path)
-        except OSError:
-            logger.exception("Could not inspect temporary upload session %s", entry.path)
+def _cleanup_stale_upload_sessions(db: Session) -> None:
+    cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=24)
+    db.query(UploadChunk).filter(UploadChunk.updated_at < cutoff).delete(synchronize_session=False)
+    db.commit()
 
 
 @app.post("/api/upload/chunk")
@@ -200,6 +195,7 @@ async def upload_file_chunk(
     chunk_index: int = Form(...),
     total_chunks: int = Form(...),
     chunk: UploadFile = File(...),
+    db: Session = Depends(get_db),
 ):
     if total_chunks < 1 or total_chunks > 10000 or chunk_index < 0 or chunk_index >= total_chunks:
         raise HTTPException(status_code=400, detail="Índice de fragmento inválido.")
@@ -208,12 +204,20 @@ async def upload_file_chunk(
     if len(content) > UPLOAD_CHUNK_SIZE:
         raise HTTPException(status_code=413, detail="El fragmento supera el tamaño permitido.")
 
-    _cleanup_stale_upload_sessions()
-    upload_dir = _upload_session_dir(upload_id)
-    os.makedirs(upload_dir, exist_ok=True)
-    chunk_path = os.path.join(upload_dir, f"{chunk_index:05d}.part")
-    with open(chunk_path, "wb") as chunk_file:
-        chunk_file.write(content)
+    safe_id = _normalize_upload_id(upload_id)
+    _cleanup_stale_upload_sessions(db)
+    db.query(UploadChunk).filter(
+        UploadChunk.upload_id == safe_id,
+        UploadChunk.chunk_index == chunk_index,
+    ).delete(synchronize_session=False)
+    db.add(UploadChunk(
+        upload_id=safe_id,
+        chunk_index=chunk_index,
+        total_chunks=total_chunks,
+        content=content,
+        updated_at=datetime.datetime.utcnow(),
+    ))
+    db.commit()
     return {"success": True, "chunkIndex": chunk_index}
 
 
@@ -228,21 +232,24 @@ async def complete_chunked_upload(
     if total_chunks < 1 or total_chunks > 10000:
         raise HTTPException(status_code=400, detail="Cantidad de fragmentos inválida.")
 
-    upload_dir = _upload_session_dir(upload_id)
+    safe_id = _normalize_upload_id(upload_id)
     safe_filename = os.path.basename(filename) or "archivo.csv"
     extension = os.path.splitext(safe_filename)[1]
-    assembled_path = os.path.join(upload_dir, f"assembled{extension}")
+    assembled_path = os.path.join(
+        tempfile.gettempdir(), f"truedeck-{safe_id}-{uuid.uuid4().hex}{extension}"
+    )
 
     try:
-        if not os.path.isdir(upload_dir):
+        chunk_query = db.query(UploadChunk).filter(UploadChunk.upload_id == safe_id)
+        if chunk_query.count() != total_chunks:
             raise HTTPException(status_code=400, detail="No se encontraron fragmentos para esta carga.")
         with open(assembled_path, "wb") as assembled_file:
-            for index in range(total_chunks):
-                chunk_path = os.path.join(upload_dir, f"{index:05d}.part")
-                if not os.path.isfile(chunk_path):
-                    raise HTTPException(status_code=400, detail=f"Falta el fragmento {index + 1} del archivo.")
-                with open(chunk_path, "rb") as chunk_file:
-                    shutil.copyfileobj(chunk_file, assembled_file)
+            expected_index = 0
+            for saved_chunk in chunk_query.order_by(UploadChunk.chunk_index).yield_per(1):
+                if saved_chunk.chunk_index != expected_index or saved_chunk.total_chunks != total_chunks:
+                    raise HTTPException(status_code=400, detail=f"Falta el fragmento {expected_index + 1} del archivo.")
+                assembled_file.write(saved_chunk.content)
+                expected_index += 1
 
         return await run_in_threadpool(
             _import_telemetry_file,
@@ -252,12 +259,21 @@ async def complete_chunked_upload(
             db,
         )
     finally:
-        _remove_upload_session(upload_dir)
+        try:
+            if os.path.exists(assembled_path):
+                os.remove(assembled_path)
+            db.query(UploadChunk).filter(UploadChunk.upload_id == safe_id).delete(synchronize_session=False)
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Could not remove uploaded chunks for session %s", safe_id)
 
 
 @app.delete("/api/upload/chunk/{upload_id}")
-def cancel_chunked_upload(upload_id: str):
-    _remove_upload_session(_upload_session_dir(upload_id))
+def cancel_chunked_upload(upload_id: str, db: Session = Depends(get_db)):
+    safe_id = _normalize_upload_id(upload_id)
+    db.query(UploadChunk).filter(UploadChunk.upload_id == safe_id).delete(synchronize_session=False)
+    db.commit()
     return {"success": True}
 
 
@@ -433,3 +449,9 @@ def limpiar_datos(db: Session = Depends(get_db)):
     db.query(ArchivoCargado).delete()
     db.commit()
     return {"success": True, "message": "Base de datos reiniciada correctamente"}
+
+
+# Vercel serves the built Vite frontend from the same FastAPI deployment.
+# Keep this mount last so the API routes above take precedence.
+if os.path.isdir(FRONTEND_DIST_DIR):
+    app.mount("/", StaticFiles(directory=FRONTEND_DIST_DIR, html=True), name="frontend")
