@@ -1,46 +1,28 @@
-# PostgreSQL / Supabase
+# Supabase PostgreSQL
 
-The backend uses `DATABASE_URL` when set. Without it, local development keeps
-using `backend/telemetria.db` (SQLite).
+The application requires Supabase PostgreSQL through `DATABASE_URL`. It does
+not create, read, or write a local SQLite database. If `DATABASE_URL` is
+missing, the backend stops with a configuration error.
 
-## Create the Supabase schema
+## Configure Supabase
 
-1. Create a Supabase project.
-2. Run `supabase/migrations/20261119000100_create_telemetry_tables.sql` in the
-   Supabase SQL Editor, or apply it with the Supabase CLI.
-3. For Vercel, open **Connect → Transaction pooler** and copy its URI (port
-   `6543`). Keep its password private and URL-encode reserved characters.
-4. Set `DATABASE_URL` in the backend's environment. The backend understands
-   both `postgresql://` and `postgres://` Supabase URIs.
+1. In the Supabase project, open **SQL Editor** and run
+   `supabase/migrations/20261119000100_create_telemetry_tables.sql`.
+2. In Supabase **Connect**, copy the **Transaction pooler** URI (port `6543`).
+   URL-encode special characters in the password and keep the URI secret.
+3. Set the URI as `DATABASE_URL` in your local environment or Vercel project.
+   The backend accepts `postgresql://` and `postgres://` URIs and enables SSL.
+4. Restart or redeploy the application. Its FastAPI startup will verify/create
+   the ORM tables against PostgreSQL.
 
-The migration creates `upload_chunks` as temporary staging storage. The upload
-API deletes those rows after processing each file; storing chunks in PostgreSQL
-lets Vercel assemble uploads across separate function invocations.
-
-## Copy the current local SQLite data
-
-The migration script copies rows from the local SQLite file to empty PostgreSQL
-tables in batches and resets the identity sequences afterward:
-
-```sh
-python -m pip install -r requirements.txt
-DATABASE_URL='postgresql://…' python backend/migrate_sqlite_to_postgres.py
-```
-
-For this one-time copy, use Supabase's direct URI or session-pooler URI rather
-than the transaction-pooler URI.
-
-Set `SQLITE_PATH` if the source file is somewhere other than
-`backend/telemetria.db`. The script refuses to write into non-empty target
-tables so it cannot silently duplicate records.
+The migration creates `telemetria`, `archivos_cargados`, and `upload_chunks`.
+The upload endpoint uses PostgreSQL staging rows to assemble files across
+separate Vercel function invocations.
 
 ## Vercel API routes
 
-To deploy the FastAPI API and Vite frontend in the same Vercel project, set that
-project's **Root Directory** to the repository root (`.`), then redeploy. The
-root `pyproject.toml` points Vercel to `backend.main:app` and runs the frontend
-build. Add `DATABASE_URL` to the Vercel project's environment variables.
-
-The Vercel function's local filesystem is temporary; use Supabase/PostgreSQL
-for database records. The upload endpoint sends chunks under Vercel's function
-request-size limit.
+Set the Vercel project's **Root Directory** to the repository root (`.`), then
+add `DATABASE_URL` to its environment variables and redeploy. The root
+`pyproject.toml` configures Vercel to serve `backend.main:app` and build the
+frontend. The Vercel function's local filesystem is temporary, so persistent
+application data belongs in Supabase.
