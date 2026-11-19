@@ -9,3 +9,4 @@ backend/venv/
 
 # Frontend build output
 frontend/dist/
+frontend/node_modules/

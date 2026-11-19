@@ -11,13 +11,16 @@ export default defineConfig({
   plugins: [
     {
       name: "truedeck-static-entry",
-      transformIndexHtml(html) {
-        // Keep FastAPI's /static/app.js path intact at runtime, while letting
-        // Vite bundle the same script for the static Vercel build.
-        return html.replace(
-          '<script src="/static/app.js"></script>',
-          '<script type="module" src="./app.js"></script>',
-        );
+      transformIndexHtml: {
+        // Run before Vite's HTML handler so it bundles this module instead of
+        // leaving a relative app.js URL that does not exist in the output.
+        order: "pre",
+        handler(html) {
+          return html.replace(
+            '<script src="/static/app.js"></script>',
+            '<script type="module" src="./app.js"></script>',
+          );
+        },
       },
     },
   ],
