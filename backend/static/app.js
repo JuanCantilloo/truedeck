@@ -30,10 +30,23 @@ const TILE_LAYERS = {
 let activeBaseLayer;
 
 document.addEventListener('DOMContentLoaded', () => {
-  lucide.createIcons();
-  initMap();
-  renderRecentBusSearches();
+  // Wire the controls first so a CDN failure in optional map/icon libraries
+  // cannot leave the upload button and dialogs unresponsive.
   setupEventListeners();
+  renderRecentBusSearches();
+
+  try {
+    window.lucide?.createIcons?.();
+  } catch (err) {
+    console.warn('Lucide icons could not be initialized:', err);
+  }
+
+  try {
+    initMap();
+  } catch (err) {
+    console.error('Map could not be initialized:', err);
+  }
+
   loadInitialData();
 });
 
