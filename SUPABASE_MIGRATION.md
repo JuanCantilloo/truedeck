@@ -1,24 +1,40 @@
-# Vercel and temporary SQLite
+# Supabase PostgreSQL
 
-The application now uses SQLite instead of Supabase. On Vercel, the database
-file is placed under `/tmp/truedeck/telemetria.db`, which belongs to a
-temporary function instance and is removed when Vercel recycles that instance.
-No `DATABASE_URL` is required. Local development uses the same temporary path
-unless `SQLITE_PATH` is set.
+The backend uses Supabase PostgreSQL through the `DATABASE_URL` environment
+variable. It no longer falls back to SQLite. The schema migration is in
+`supabase/migrations/20261119000100_create_telemetry_tables.sql`.
+
+## Configure the connection
+
+1. In Supabase, open **Connect → Transaction pooler** and copy the URI on port
+   `6543`. Use the pooler username shown by Supabase.
+2. URL-encode reserved characters in the database password and keep the URI
+   secret.
+3. In Vercel, open **Settings → Environment Variables** and add:
+   - **Name:** `DATABASE_URL`
+   - **Value:** the Supabase Transaction pooler URI
+   - Select **Production**, **Preview**, and/or **Development** as needed.
+4. Redeploy so the function receives the variable.
+
+Only `DATABASE_URL` is required. The backend uses SQLAlchemy with the psycopg
+driver, requires SSL, and disables prepared statements for compatibility with
+Supabase's transaction pooler. Do not put the URI in frontend code or commit it
+to GitHub.
+
+## Apply the schema
+
+The current Supabase project already has the schema and migrated rows. For a
+new project, run `supabase/migrations/20261119000100_create_telemetry_tables.sql`
+in the Supabase SQL Editor before deploying. The backend also creates ORM
+tables on startup if they are missing.
 
 ## Vercel project settings
 
-- Set **Root Directory** to the repository root (`.`).
-- Clear **Output Directory** if it points to `dist` or `frontend/dist`.
-- Redeploy the latest commit. The root `app.py` exposes the FastAPI app and
-  `pyproject.toml` builds the frontend into `frontend/dist`.
-- Verify `https://<deployment-domain>/api/health` returns `{"status":"ok"}`.
-
-Small files (up to 3 MiB) are sent in one request. Larger files are split into
-requests and staged in SQLite. Because Vercel's temporary filesystem is local
-to each function instance, a large upload can fail if its requests land on
-different instances. Reliable large-file uploads require shared temporary
-storage, such as Supabase or object storage.
-
-The previous Supabase migration SQL remains in `supabase/migrations/` for
-reference; the application no longer reads or writes those tables.
+- Set **Root Directory** to the repository root (leave the field empty).
+- Keep **Include files outside the root directory** enabled if the dashboard
+  requires it.
+- Clear **Output Directory** overrides such as `dist` or `frontend/dist`.
+- Deploy the latest commit. The root `app.py` exposes the FastAPI app; the
+  root `requirements.txt` and `frontend/requirements.txt` both include the
+  Python dependencies so either project root can install them.
+- Verify `/api/health` on the deployment domain returns `{"status":"ok"}`.
