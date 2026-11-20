@@ -1,0 +1,9 @@
+# Runtime dependencies for deployments whose Vercel Root Directory is frontend.
+# Keep this list aligned with ../requirements.txt.
+fastapi>=0.115,<1
+numpy>=2.0,<3
+openpyxl>=3.1,<4
+pandas>=2.2,<4
+python-multipart>=0.0.20,<1
+SQLAlchemy>=2.0,<3
+uvicorn[standard]>=0.30,<1
