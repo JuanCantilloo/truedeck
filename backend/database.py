@@ -10,7 +10,8 @@ else:
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL is required. Set the Supabase PostgreSQL connection URI.")
+    # Fallback to a local SQLite database for development/testing
+    DATABASE_URL = "sqlite:///./dev.db"
 
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
@@ -28,7 +29,11 @@ engine_options = {
 if os.getenv("VERCEL"):
     engine_options["poolclass"] = NullPool
 
-engine = create_engine(DATABASE_URL, **engine_options)
+if DATABASE_URL.startswith("sqlite"):
+    # SQLite engine; no SSL or pool options needed
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+else:
+    engine = create_engine(DATABASE_URL, **engine_options)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
