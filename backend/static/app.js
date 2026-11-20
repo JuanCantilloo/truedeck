@@ -1146,6 +1146,30 @@ async function performUpload(selectedBuses = []) {
       const uploadId = createUploadId();
       const fileChunkCount = Math.max(1, Math.ceil(item.file.size / chunkSize));
       try {
+        // A small file fits in one Vercel request, so upload it directly and
+        // avoid depending on temporary SQLite state between function calls.
+        if (item.file.size <= chunkSize) {
+          statusText.innerText = `📤 Cargando ${index + 1}/${filesToUpload.length}: ${item.file.name}`;
+          const form = new FormData();
+          form.append('file', item.file, item.file.name);
+          form.append('buses', JSON.stringify(fileBuses));
+          const response = await fetch('/api/upload', { method: 'POST', body: form });
+          const result = await readUploadResponse(response);
+          if (!response.ok || result.success !== true) {
+            throw new Error(result.detail || `el servidor respondió HTTP ${response.status}`);
+          }
+          successfulFiles += 1;
+          totalRows += result.registrosImportados || 0;
+          totalFailures += result.totalConFalla || 0;
+          uploadedChunks += 1;
+          if (progressBar) {
+            const percent = Math.floor((uploadedChunks / totalChunks) * 90);
+            progressBar.style.width = `${percent}%`;
+            progressLabel.innerText = `${percent}%`;
+          }
+          continue;
+        }
+
         for (let chunkIndex = 0; chunkIndex < fileChunkCount; chunkIndex += 1) {
           const start = chunkIndex * chunkSize;
           const chunkBlob = item.file.slice(start, Math.min(start + chunkSize, item.file.size));

@@ -7,7 +7,7 @@ Base = declarative_base()
 class RegistroTelemetria(Base):
     __tablename__ = "telemetria"
 
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, index=True)
     idRuta = Column(String(50), nullable=True)
     idVehiculo = Column(String(50), index=True, nullable=False)
     fechaHoraLecturaDato = Column(DateTime, index=True, nullable=True)
@@ -31,7 +31,7 @@ class RegistroTelemetria(Base):
 class ArchivoCargado(Base):
     __tablename__ = "archivos_cargados"
 
-    id = Column(BigInteger, primary_key=True, index=True)
+    id = Column(BigInteger().with_variant(Integer, "sqlite"), primary_key=True, index=True)
     nombre = Column(String(255), nullable=False)
     totalRegistros = Column(Integer, default=0)
     totalConFalla = Column(Integer, default=0)

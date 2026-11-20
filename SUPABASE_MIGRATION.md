@@ -1,28 +1,24 @@
-# Supabase PostgreSQL
+# Vercel and temporary SQLite
 
-The application requires Supabase PostgreSQL through `DATABASE_URL`. It does
-not create, read, or write a local SQLite database. If `DATABASE_URL` is
-missing, the backend stops with a configuration error.
+The application now uses SQLite instead of Supabase. On Vercel, the database
+file is placed under `/tmp/truedeck/telemetria.db`, which belongs to a
+temporary function instance and is removed when Vercel recycles that instance.
+No `DATABASE_URL` is required. Local development uses the same temporary path
+unless `SQLITE_PATH` is set.
 
-## Configure Supabase
+## Vercel project settings
 
-1. In the Supabase project, open **SQL Editor** and run
-   `supabase/migrations/20261119000100_create_telemetry_tables.sql`.
-2. In Supabase **Connect**, copy the **Transaction pooler** URI (port `6543`).
-   URL-encode special characters in the password and keep the URI secret.
-3. Set the URI as `DATABASE_URL` in your local environment or Vercel project.
-   The backend accepts `postgresql://` and `postgres://` URIs and enables SSL.
-4. Restart or redeploy the application. Its FastAPI startup will verify/create
-   the ORM tables against PostgreSQL.
+- Set **Root Directory** to the repository root (`.`).
+- Clear **Output Directory** if it points to `dist` or `frontend/dist`.
+- Redeploy the latest commit. The root `app.py` exposes the FastAPI app and
+  `pyproject.toml` builds the frontend into `frontend/dist`.
+- Verify `https://<deployment-domain>/api/health` returns `{"status":"ok"}`.
 
-The migration creates `telemetria`, `archivos_cargados`, and `upload_chunks`.
-The upload endpoint uses PostgreSQL staging rows to assemble files across
-separate Vercel function invocations.
+Small files (up to 3 MiB) are sent in one request. Larger files are split into
+requests and staged in SQLite. Because Vercel's temporary filesystem is local
+to each function instance, a large upload can fail if its requests land on
+different instances. Reliable large-file uploads require shared temporary
+storage, such as Supabase or object storage.
 
-## Vercel API routes
-
-Set the Vercel project's **Root Directory** to the repository root (`.`), then
-add `DATABASE_URL` to its environment variables and redeploy. The root
-`pyproject.toml` configures Vercel to serve `backend.main:app` and build the
-frontend. The Vercel function's local filesystem is temporary, so persistent
-application data belongs in Supabase.
+The previous Supabase migration SQL remains in `supabase/migrations/` for
+reference; the application no longer reads or writes those tables.

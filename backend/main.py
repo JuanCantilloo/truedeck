@@ -28,6 +28,7 @@ app = FastAPI(title="TrueDeck Telemetría & Mapas API", version="1.0.0")
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 FRONTEND_DIST_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist"))
+FRONTEND_ASSETS_DIR = os.path.join(FRONTEND_DIST_DIR, "assets")
 # Vercel Functions reject request bodies above 4.5 MB, including multipart
 # overhead. Three MiB chunks stay safely below that limit.
 UPLOAD_CHUNK_SIZE = 3 * 1024 * 1024
@@ -35,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 if os.path.exists(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if os.path.exists(FRONTEND_ASSETS_DIR):
+    app.mount("/assets", StaticFiles(directory=FRONTEND_ASSETS_DIR), name="assets")
 
 @app.get("/")
 def read_root():
